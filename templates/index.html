@@ -8,7 +8,9 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link href="https://fonts.googleapis.com/css2?family=Space+Mono:ital,wght@0,400;0,700;1,400&family=Syne:wght@400;600;700;800&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+
   <link rel="icon" type="image/svg+xml" href="{{ url_for('static', filename='favicon.svg') }}" />
+
 </head>
 <body>
 
@@ -231,6 +233,11 @@
      SCRIPTS
 ════════════════════════════════════════════════════ -->
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<!-- Pass Flask data safely to JS via JSON script block -->
+<script id="islandData" type="application/json">
+  {{ islands | tojson | safe }}
+</script>
+
 <script>
 // ─── State ────────────────────────────────────────────────────────────────────
 let currentLat = null, currentLon = null;
@@ -239,7 +246,7 @@ let mapMarker  = null;
 let history    = [];
 
 // ─── Island quick-select buttons ──────────────────────────────────────────────
-const ISLANDS = {{ islands | tojson }};
+const ISLANDS = JSON.parse(document.getElementById('islandData').textContent);
 
 const grid = document.getElementById("islandGrid");
 for (const [key, isl] of Object.entries(ISLANDS)) {
@@ -336,8 +343,11 @@ function renderResult(d) {
   document.getElementById("riskResult").classList.remove("hidden");
 
   // Location & time
-  const loc = d.city && d.city !== "Simulated Location" ? d.city : `${d.lat?.toFixed(2) || ""}°, ${d.lon?.toFixed(2) || ""}°`;
-  document.getElementById("riskLocation").textContent = loc || "Custom Location";
+  let loc = d.city;
+  if (!loc || loc === "Simulated Location") {
+    loc = d.lat && d.lon ? `${d.lat.toFixed(2)}°, ${d.lon.toFixed(2)}°` : "Manual Entry";
+  }
+  document.getElementById("riskLocation").textContent = loc;
   document.getElementById("riskTime").textContent     = new Date().toLocaleTimeString();
 
   // Badge
@@ -373,9 +383,13 @@ function renderResult(d) {
 
   // Source note
   const note = document.getElementById("sourceNote");
-  note.textContent = d.source === "live"
-    ? "✅ Live weather data (OpenWeatherMap)"
-    : "🔵 Simulated weather data (set API key for live data)";
+  if (d.source === "live") {
+    note.textContent = "✅ Live weather data (OpenWeatherMap)";
+  } else if (d.source === "manual") {
+    note.textContent = "⚙ Manual feature override active";
+  } else {
+    note.textContent = "🔵 Simulated weather data (fallback)";
+  }
 
   // Map marker colour
   if (mapMarker && d.lat) {
