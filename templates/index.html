@@ -1,0 +1,449 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>ForestGuard — Island Fire Risk Intelligence</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link href="https://fonts.googleapis.com/css2?family=Space+Mono:ital,wght@0,400;0,700;1,400&family=Syne:wght@400;600;700;800&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <link rel="icon" type="image/svg+xml" href="{{ url_for('static', filename='favicon.svg') }}" />
+</head>
+<body>
+
+<!-- ── Ambient background ── -->
+<div class="bg-grid"></div>
+<div class="ember" id="e1"></div>
+<div class="ember" id="e2"></div>
+<div class="ember" id="e3"></div>
+
+<!-- ════════════════════════════════════════════════════
+     HEADER
+════════════════════════════════════════════════════ -->
+<header class="site-header">
+  <div class="logo">
+    <span class="logo-icon">🔥</span>
+    <span class="logo-text">Forest<strong>Guard</strong></span>
+  </div>
+  <div class="header-meta">
+    <span class="badge-live" id="liveIndicator">● LIVE</span>
+    <span class="header-tag">Island Fire Risk Intelligence</span>
+  </div>
+</header>
+
+<!-- ════════════════════════════════════════════════════
+     ALERT BANNER (hidden by default)
+════════════════════════════════════════════════════ -->
+<div class="alert-banner" id="alertBanner">
+  <span class="alert-icon">⚠</span>
+  <span class="alert-text">HIGH FIRE RISK DETECTED — Immediate action recommended. Notify local fire authorities.</span>
+  <button class="alert-close" onclick="dismissAlert()">✕</button>
+</div>
+
+<!-- ════════════════════════════════════════════════════
+     MAIN LAYOUT
+════════════════════════════════════════════════════ -->
+<main class="layout">
+
+  <!-- ── LEFT PANEL: Controls ── -->
+  <aside class="panel panel--controls">
+    <h2 class="panel-title">Select Location</h2>
+
+    <!-- Island quick-select -->
+    <div class="island-grid" id="islandGrid">
+      <!-- Populated by JS -->
+    </div>
+
+    <div class="divider"><span>or enter coordinates</span></div>
+
+    <!-- Manual coords -->
+    <div class="coord-inputs">
+      <label class="input-wrap">
+        <span>Latitude</span>
+        <input type="number" id="latInput" placeholder="e.g. 28.29" step="0.01" min="-90" max="90" />
+      </label>
+      <label class="input-wrap">
+        <span>Longitude</span>
+        <input type="number" id="lonInput" placeholder="e.g. -16.62" step="0.01" min="-180" max="180" />
+      </label>
+    </div>
+
+    <button class="btn-primary" id="checkBtn" onclick="runPrediction()">
+      <span class="btn-inner">
+        <span class="btn-icon">⚡</span>
+        Check Fire Risk
+      </span>
+      <span class="btn-loader" id="btnLoader"></span>
+    </button>
+
+    <!-- Auto-refresh toggle -->
+    <label class="toggle-wrap">
+      <input type="checkbox" id="autoRefresh" onchange="toggleAutoRefresh()" />
+      <span class="toggle-track"><span class="toggle-thumb"></span></span>
+      <span class="toggle-label">Auto-refresh every 30 s</span>
+    </label>
+
+    <!-- Data source notice -->
+    <p class="source-note" id="sourceNote"></p>
+
+    <!-- ── Manual override ── -->
+    <details class="manual-override" id="manualOverride">
+      <summary>⚙ Manual Feature Override</summary>
+      <div class="override-grid">
+        <label class="input-wrap">
+          <span>Temperature (°C)</span>
+          <input type="number" id="m_temp" placeholder="e.g. 35" />
+        </label>
+        <label class="input-wrap">
+          <span>Humidity (%)</span>
+          <input type="number" id="m_hum" placeholder="e.g. 20" />
+        </label>
+        <label class="input-wrap">
+          <span>Wind Speed (km/h)</span>
+          <input type="number" id="m_wind" placeholder="e.g. 40" />
+        </label>
+        <label class="input-wrap">
+          <span>Drought Index</span>
+          <input type="number" id="m_drought" placeholder="e.g. 500" />
+        </label>
+        <label class="input-wrap">
+          <span>Vegetation (0–1)</span>
+          <input type="number" id="m_veg" step="0.01" placeholder="e.g. 0.7" />
+        </label>
+        <label class="input-wrap">
+          <span>Slope (°)</span>
+          <input type="number" id="m_slope" placeholder="e.g. 15" />
+        </label>
+      </div>
+      <button class="btn-secondary" onclick="runManualPrediction()">Run Manual Prediction</button>
+    </details>
+  </aside>
+
+  <!-- ── CENTER PANEL: Result + Map ── -->
+  <section class="panel panel--main">
+
+    <!-- Risk gauge -->
+    <div class="risk-card" id="riskCard">
+      <div class="risk-idle" id="riskIdle">
+        <div class="idle-icon">🌲</div>
+        <p>Select an island and click <strong>Check Fire Risk</strong></p>
+      </div>
+
+      <div class="risk-result hidden" id="riskResult">
+        <div class="risk-header">
+          <span class="risk-location" id="riskLocation">—</span>
+          <span class="risk-time" id="riskTime">—</span>
+        </div>
+
+        <!-- Big risk badge -->
+        <div class="risk-badge-wrap">
+          <div class="risk-ring" id="riskRing">
+            <div class="risk-badge" id="riskBadge">
+              <span class="risk-emoji" id="riskEmoji">🟢</span>
+              <span class="risk-label" id="riskLabel">—</span>
+              <span class="risk-sublabel">RISK LEVEL</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Probability bars -->
+        <div class="prob-bars">
+          <div class="prob-row">
+            <span class="prob-name">🟢 Low</span>
+            <div class="prob-bar-track"><div class="prob-bar prob-bar--low" id="barLow"></div></div>
+            <span class="prob-pct" id="pctLow">—</span>
+          </div>
+          <div class="prob-row">
+            <span class="prob-name">🟡 Medium</span>
+            <div class="prob-bar-track"><div class="prob-bar prob-bar--med" id="barMed"></div></div>
+            <span class="prob-pct" id="pctMed">—</span>
+          </div>
+          <div class="prob-row">
+            <span class="prob-name">🔴 High</span>
+            <div class="prob-bar-track"><div class="prob-bar prob-bar--high" id="barHigh"></div></div>
+            <span class="prob-pct" id="pctHigh">—</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Map -->
+    <div class="map-wrap">
+      <div id="map"></div>
+      <div class="map-label">📍 Click the map to select a custom location</div>
+    </div>
+  </section>
+
+  <!-- ── RIGHT PANEL: Weather data + history ── -->
+  <aside class="panel panel--stats">
+    <h2 class="panel-title">Environmental Data</h2>
+
+    <div class="stat-grid" id="statGrid">
+      <div class="stat-card" id="s_temp">
+        <span class="stat-icon">🌡</span>
+        <span class="stat-value" id="sv_temp">—</span>
+        <span class="stat-unit">°C</span>
+        <span class="stat-label">Temperature</span>
+      </div>
+      <div class="stat-card" id="s_hum">
+        <span class="stat-icon">💧</span>
+        <span class="stat-value" id="sv_hum">—</span>
+        <span class="stat-unit">%</span>
+        <span class="stat-label">Humidity</span>
+      </div>
+      <div class="stat-card" id="s_wind">
+        <span class="stat-icon">💨</span>
+        <span class="stat-value" id="sv_wind">—</span>
+        <span class="stat-unit">km/h</span>
+        <span class="stat-label">Wind Speed</span>
+      </div>
+      <div class="stat-card" id="s_drought">
+        <span class="stat-icon">☀</span>
+        <span class="stat-value" id="sv_drought">—</span>
+        <span class="stat-unit">KBDI</span>
+        <span class="stat-label">Drought Index</span>
+      </div>
+      <div class="stat-card" id="s_veg">
+        <span class="stat-icon">🌿</span>
+        <span class="stat-value" id="sv_veg">—</span>
+        <span class="stat-unit">NDVI</span>
+        <span class="stat-label">Vegetation</span>
+      </div>
+      <div class="stat-card" id="s_slope">
+        <span class="stat-icon">⛰</span>
+        <span class="stat-value" id="sv_slope">—</span>
+        <span class="stat-unit">°</span>
+        <span class="stat-label">Slope</span>
+      </div>
+    </div>
+
+    <!-- History log -->
+    <h2 class="panel-title" style="margin-top:2rem">Prediction History</h2>
+    <div class="history-list" id="historyList">
+      <p class="history-empty">No predictions yet.</p>
+    </div>
+  </aside>
+
+</main>
+
+<!-- ════════════════════════════════════════════════════
+     SCRIPTS
+════════════════════════════════════════════════════ -->
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script>
+// ─── State ────────────────────────────────────────────────────────────────────
+let currentLat = null, currentLon = null;
+let autoTimer  = null;
+let mapMarker  = null;
+let history    = [];
+
+// ─── Island quick-select buttons ──────────────────────────────────────────────
+const ISLANDS = {{ islands | tojson }};
+
+const grid = document.getElementById("islandGrid");
+for (const [key, isl] of Object.entries(ISLANDS)) {
+  const btn = document.createElement("button");
+  btn.className  = "island-btn";
+  btn.textContent = isl.name.split(",")[0];
+  btn.dataset.key = key;
+  btn.onclick = () => selectIsland(key, btn);
+  grid.appendChild(btn);
+}
+
+function selectIsland(key, btn) {
+  document.querySelectorAll(".island-btn").forEach(b => b.classList.remove("active"));
+  btn.classList.add("active");
+  const isl = ISLANDS[key];
+  document.getElementById("latInput").value = isl.lat;
+  document.getElementById("lonInput").value = isl.lon;
+  currentLat = isl.lat;
+  currentLon = isl.lon;
+  flyMap(isl.lat, isl.lon);
+}
+
+// ─── Map ──────────────────────────────────────────────────────────────────────
+const map = L.map("map", { zoomControl: true }).setView([20, 0], 2);
+L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+  attribution: "© OpenStreetMap contributors"
+}).addTo(map);
+
+map.on("click", e => {
+  const { lat, lng } = e.latlng;
+  document.getElementById("latInput").value = lat.toFixed(4);
+  document.getElementById("lonInput").value = lng.toFixed(4);
+  document.querySelectorAll(".island-btn").forEach(b => b.classList.remove("active"));
+  placeMarker(lat, lng);
+});
+
+function flyMap(lat, lon) {
+  map.flyTo([lat, lon], 7, { duration: 1.2 });
+  placeMarker(lat, lon);
+}
+
+function placeMarker(lat, lon) {
+  if (mapMarker) map.removeLayer(mapMarker);
+  mapMarker = L.circleMarker([lat, lon], {
+    radius: 10, color: "#ff4d00", fillColor: "#ff7730",
+    fillOpacity: 0.85, weight: 2
+  }).addTo(map);
+}
+
+// ─── Prediction ───────────────────────────────────────────────────────────────
+async function runPrediction() {
+  const lat = parseFloat(document.getElementById("latInput").value);
+  const lon = parseFloat(document.getElementById("lonInput").value);
+  if (isNaN(lat) || isNaN(lon)) { alert("Please enter valid coordinates or pick an island."); return; }
+  currentLat = lat; currentLon = lon;
+  await fetchAndRender({ lat, lon });
+}
+
+async function runManualPrediction() {
+  const payload = {
+    temperature:   parseFloat(document.getElementById("m_temp").value),
+    humidity:      parseFloat(document.getElementById("m_hum").value),
+    wind_speed:    parseFloat(document.getElementById("m_wind").value),
+    drought_index: parseFloat(document.getElementById("m_drought").value),
+    vegetation:    parseFloat(document.getElementById("m_veg").value),
+    slope:         parseFloat(document.getElementById("m_slope").value),
+  };
+  if (Object.values(payload).some(isNaN)) { alert("Fill all manual fields."); return; }
+  await fetchAndRender(payload);
+}
+
+async function fetchAndRender(payload) {
+  setLoading(true);
+  try {
+    const res  = await fetch("/predict", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    const data = await res.json();
+    if (data.error) { alert("Error: " + data.error); return; }
+    renderResult(data);
+    addHistory(data);
+  } catch (e) {
+    alert("Could not reach the server. Is app.py running?\n" + e);
+  } finally {
+    setLoading(false);
+  }
+}
+
+function renderResult(d) {
+  // Show result card
+  document.getElementById("riskIdle").classList.add("hidden");
+  document.getElementById("riskResult").classList.remove("hidden");
+
+  // Location & time
+  const loc = d.city && d.city !== "Simulated Location" ? d.city : `${d.lat?.toFixed(2) || ""}°, ${d.lon?.toFixed(2) || ""}°`;
+  document.getElementById("riskLocation").textContent = loc || "Custom Location";
+  document.getElementById("riskTime").textContent     = new Date().toLocaleTimeString();
+
+  // Badge
+  const card  = document.getElementById("riskCard");
+  const ring  = document.getElementById("riskRing");
+  const badge = document.getElementById("riskBadge");
+  card.dataset.level  = d.risk_level.toLowerCase();
+  ring.dataset.level  = d.risk_level.toLowerCase();
+  badge.dataset.level = d.risk_level.toLowerCase();
+
+  document.getElementById("riskEmoji").textContent = d.risk_emoji;
+  document.getElementById("riskLabel").textContent = d.risk_level;
+
+  // Probability bars
+  const p = d.probabilities;
+  animateBar("barLow",  "pctLow",  p.Low);
+  animateBar("barMed",  "pctMed",  p.Medium);
+  animateBar("barHigh", "pctHigh", p.High);
+
+  // Stat cards
+  const f = d.features;
+  setStatCard("sv_temp",    f.temperature,   "s_temp",    f.temperature  > 38 ? "hot" : "");
+  setStatCard("sv_hum",     f.humidity,      "s_hum",     f.humidity     < 25 ? "hot" : "");
+  setStatCard("sv_wind",    f.wind_speed,    "s_wind",    f.wind_speed   > 50 ? "hot" : "");
+  setStatCard("sv_drought", f.drought_index, "s_drought", f.drought_index>600 ? "hot" : "");
+  setStatCard("sv_veg",     f.vegetation,    "s_veg",     "");
+  setStatCard("sv_slope",   f.slope,         "s_slope",   "");
+
+  // Alert banner
+  const banner = document.getElementById("alertBanner");
+  if (d.alert) { banner.classList.add("visible"); }
+  else         { banner.classList.remove("visible"); }
+
+  // Source note
+  const note = document.getElementById("sourceNote");
+  note.textContent = d.source === "live"
+    ? "✅ Live weather data (OpenWeatherMap)"
+    : "🔵 Simulated weather data (set API key for live data)";
+
+  // Map marker colour
+  if (mapMarker && d.lat) {
+    const colours = { Low:"#22c55e", Medium:"#f59e0b", High:"#ef4444" };
+    mapMarker.setStyle({ color: colours[d.risk_level], fillColor: colours[d.risk_level] });
+    mapMarker.bindPopup(`<b>${d.risk_level} Risk</b><br>${loc}`).openPopup();
+  }
+}
+
+function animateBar(barId, pctId, pct) {
+  const bar = document.getElementById(barId);
+  const lbl = document.getElementById(pctId);
+  bar.style.width = "0%";
+  lbl.textContent = pct + "%";
+  setTimeout(() => { bar.style.width = pct + "%"; }, 50);
+}
+
+function setStatCard(valueId, value, cardId, cls) {
+  document.getElementById(valueId).textContent = value ?? "—";
+  const card = document.getElementById(cardId);
+  card.classList.remove("hot");
+  if (cls) card.classList.add(cls);
+}
+
+function setLoading(on) {
+  const btn    = document.getElementById("checkBtn");
+  const loader = document.getElementById("btnLoader");
+  btn.disabled = on;
+  loader.style.display = on ? "inline-block" : "none";
+}
+
+// ─── History ──────────────────────────────────────────────────────────────────
+function addHistory(d) {
+  history.unshift({ time: new Date().toLocaleTimeString(), level: d.risk_level, color: d.risk_color, loc: d.city || "Custom" });
+  if (history.length > 10) history.pop();
+
+  const list = document.getElementById("historyList");
+  list.innerHTML = history.map(h => `
+    <div class="history-item">
+      <span class="hist-dot" style="background:${h.color}"></span>
+      <span class="hist-loc">${h.loc}</span>
+      <span class="hist-level" style="color:${h.color}">${h.level}</span>
+      <span class="hist-time">${h.time}</span>
+    </div>
+  `).join("");
+}
+
+// ─── Auto-refresh ─────────────────────────────────────────────────────────────
+function toggleAutoRefresh() {
+  const on = document.getElementById("autoRefresh").checked;
+  clearInterval(autoTimer);
+  if (on && currentLat !== null) {
+    autoTimer = setInterval(() => fetchAndRender({ lat: currentLat, lon: currentLon }), 30000);
+  }
+}
+
+// ─── Alert dismiss ────────────────────────────────────────────────────────────
+function dismissAlert() {
+  document.getElementById("alertBanner").classList.remove("visible");
+}
+
+// ─── Ember animation randomiser ───────────────────────────────────────────────
+["e1","e2","e3"].forEach(id => {
+  const el = document.getElementById(id);
+  el.style.left = Math.random()*90 + "vw";
+  el.style.animationDelay = (Math.random()*4) + "s";
+  el.style.animationDuration = (6 + Math.random()*6) + "s";
+});
+</script>
+</body>
+</html>
