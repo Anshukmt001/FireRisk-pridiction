@@ -20,6 +20,9 @@
 <div class="ember" id="e2"></div>
 <div class="ember" id="e3"></div>
 
+<!-- ── Notification Container ── -->
+<div id="toastContainer" class="toast-container"></div>
+
 <!-- ════════════════════════════════════════════════════
      HEADER
 ════════════════════════════════════════════════════ -->
@@ -51,6 +54,12 @@
   <!-- ── LEFT PANEL: Controls ── -->
   <aside class="panel panel--controls">
     <h2 class="panel-title">Select Location</h2>
+
+    <!-- Island Search -->
+    <div class="search-wrap">
+      <input type="text" id="islandSearch" placeholder="Search island name..." onkeydown="if(event.key==='Enter') searchIsland()" />
+      <button class="search-btn" onclick="searchIsland()">🔍</button>
+    </div>
 
     <!-- Island quick-select -->
     <div class="island-grid" id="islandGrid">
@@ -245,6 +254,57 @@ let autoTimer  = null;
 let mapMarker  = null;
 let history    = [];
 
+// ─── Search Functionality ──────────────────────────────────────────────────
+function searchIsland() {
+  const query = document.getElementById("islandSearch").value.toLowerCase().trim();
+  if (!query) return;
+
+  let bestMatch = null;
+  let bestKey   = null;
+
+  for (const [key, isl] of Object.entries(ISLANDS)) {
+    const name = isl.name.toLowerCase();
+    if (name.includes(query)) {
+      bestMatch = isl;
+      bestKey   = key;
+      break;
+    }
+  }
+
+  if (bestKey) {
+    const btn = document.querySelector(`.island-btn[data-key="${bestKey}"]`);
+    selectIsland(bestKey, btn);
+    runPrediction(); // Auto-trigger prediction on search match
+    document.getElementById("islandSearch").value = ""; // Clear search
+  } else {
+    showToast("Island not found in presets. Try entering coordinates below.", "warning");
+  }
+}
+
+// ─── Toast Notifications ───────────────────────────────────────────────────
+function showToast(message, type = "error") {
+  const container = document.getElementById("toastContainer");
+  const toast = document.createElement("div");
+  toast.className = `toast toast--${type}`;
+  
+  const icon = type === "error" ? "❌" : type === "warning" ? "⚠️" : "ℹ️";
+  
+  toast.innerHTML = `
+    <span class="toast-icon">${icon}</span>
+    <span class="toast-msg">${message}</span>
+    <button class="toast-close" onclick="this.parentElement.remove()">✕</button>
+  `;
+  
+  container.appendChild(toast);
+  
+  // Auto-remove after 5s
+  setTimeout(() => {
+    toast.style.opacity = "0";
+    toast.style.transform = "translateX(20px)";
+    setTimeout(() => toast.remove(), 400);
+  }, 5000);
+}
+
 // ─── Island quick-select buttons ──────────────────────────────────────────────
 const ISLANDS = JSON.parse(document.getElementById('islandData').textContent);
 
@@ -300,7 +360,10 @@ function placeMarker(lat, lon) {
 async function runPrediction() {
   const lat = parseFloat(document.getElementById("latInput").value);
   const lon = parseFloat(document.getElementById("lonInput").value);
-  if (isNaN(lat) || isNaN(lon)) { alert("Please enter valid coordinates or pick an island."); return; }
+  if (isNaN(lat) || isNaN(lon)) { 
+    showToast("Please enter valid coordinates or pick an island.", "warning"); 
+    return; 
+  }
   currentLat = lat; currentLon = lon;
   await fetchAndRender({ lat, lon });
 }
@@ -314,7 +377,10 @@ async function runManualPrediction() {
     vegetation:    parseFloat(document.getElementById("m_veg").value),
     slope:         parseFloat(document.getElementById("m_slope").value),
   };
-  if (Object.values(payload).some(isNaN)) { alert("Fill all manual fields."); return; }
+  if (Object.values(payload).some(isNaN)) { 
+    showToast("Fill all manual fields before running prediction.", "warning"); 
+    return; 
+  }
   await fetchAndRender(payload);
 }
 
@@ -327,11 +393,14 @@ async function fetchAndRender(payload) {
       body: JSON.stringify(payload),
     });
     const data = await res.json();
-    if (data.error) { alert("Error: " + data.error); return; }
+    if (data.error) { 
+      showToast("Prediction Error: " + data.error, "error"); 
+      return; 
+    }
     renderResult(data);
     addHistory(data);
   } catch (e) {
-    alert("Could not reach the server. Is app.py running?\n" + e);
+    showToast("Server Unreachable: Ensure app.py is running.", "error");
   } finally {
     setLoading(false);
   }
