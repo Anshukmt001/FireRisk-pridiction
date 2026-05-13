@@ -12,7 +12,13 @@ from flask import Flask, request, jsonify, render_template
 # Local utilities
 import sys
 sys.path.insert(0, os.path.dirname(__file__))
-from utils.data_fetch import fetch_all_features
+from utils.data_fetch import fetch_all_features, reverse_geocode
+
+try:
+    import torch
+    TORCH_AVAILABLE = True
+except ImportError:
+    TORCH_AVAILABLE = False
 
 # ─── Logging ──────────────────────────────────────────────────────────────────
 logging.basicConfig(level=logging.INFO,
@@ -43,6 +49,41 @@ def load_model():
 
 MODEL, SCALER, FEATURES = load_model()
 
+DEEP_MODEL_PATH = os.path.join(os.path.dirname(__file__), "deep_model.pkl")
+
+import torch
+import torch.nn as nn
+
+class FireRiskNN(nn.Module):
+    def __init__(self, input_size):
+        super(FireRiskNN, self).__init__()
+
+        self.network = nn.Sequential(
+            nn.Linear(input_size, 64),
+            nn.ReLU(),
+            nn.Dropout(0.3),
+
+            nn.Linear(64, 32),
+            nn.ReLU(),
+
+            nn.Linear(32, 1),
+            nn.Sigmoid()
+        )
+
+    def forward(self, x):
+        return self.network(x)
+
+def load_deep_model():
+    if not os.path.exists(DEEP_MODEL_PATH):
+        logger.warning("deep_model.pkl not found. Run: python train_deep_model.py")
+        return None, None, None, None
+    with open(DEEP_MODEL_PATH, "rb") as f:
+        bundle = pickle.load(f)
+    logger.info("Deep learning model loaded successfully.")
+    return bundle["model"], bundle["scaler"], bundle["features"], bundle.get("model_type", "deep_learning")
+
+DEEP_MODEL, DEEP_SCALER, DEEP_FEATURES, DEEP_MODEL_TYPE = load_deep_model()
+
 # ─── Risk metadata ────────────────────────────────────────────────────────────
 RISK_META = {
     0: {"label": "Low",    "color": "#22c55e", "emoji": "🟢", "alert": False},
@@ -65,32 +106,68 @@ ISLANDS = {
 }
 
 
-def _predict(features: dict) -> dict:
-    """Run inference and return enriched result dict."""
-    if MODEL is None:
-        return {"error": "Model not loaded. Run: python train_model.py"}
+def _predict(features: dict, model_type: str = "random_forest") -> dict:
+    """Run inference using ML or Deep Learning model."""
+    if model_type == "deep_learning":
+        if DEEP_MODEL is None:
+            return {"error": "Deep model not loaded. Run: python train_deep_model.py"}
+        row = np.array([[features[f] for f in DEEP_FEATURES]])
+        row_sc = DEEP_SCALER.transform(row)
 
-    row = np.array([[features[f] for f in FEATURES]])
-    row_sc = SCALER.transform(row)
+        if DEEP_MODEL_TYPE == "deep_learning_pytorch" or not hasattr(DEEP_MODEL, 'predict'):
+            import torch
+            DEEP_MODEL.eval()
+            with torch.no_grad():
+                tensor_input = torch.FloatTensor(row_sc)
+                output = DEEP_MODEL(tensor_input)
+                proba = torch.softmax(output, dim=1).numpy()[0].tolist()
+                pred_class = int(np.argmax(proba))
+        else:
+            proba = DEEP_MODEL.predict(row_sc)[0].tolist()
+            pred_class = int(np.argmax(proba))
 
-    pred_class = int(MODEL.predict(row_sc)[0])
-    proba      = MODEL.predict_proba(row_sc)[0].tolist()
+        meta = RISK_META[pred_class]
+        return {
+            "model_type":   "deep_learning",
+            "risk_level":   meta["label"],
+            "risk_class":   pred_class,
+            "risk_color":   meta["color"],
+            "risk_emoji":   meta["emoji"],
+            "alert":        meta["alert"],
+            "probabilities": {
+                "Low":    round(proba[0] * 100, 1),
+                "Medium": round(proba[1] * 100, 1),
+                "High":   round(proba[2] * 100, 1),
+            },
+            "features": {k: round(float(v), 2) for k, v in features.items()
+                         if k in DEEP_FEATURES},
+        }
+    else:
+        if MODEL is None:
+            return {"error": "Model not loaded. Run: python train_model.py"}
 
-    meta = RISK_META[pred_class]
-    return {
-        "risk_level":   meta["label"],
-        "risk_class":   pred_class,
-        "risk_color":   meta["color"],
-        "risk_emoji":   meta["emoji"],
-        "alert":        meta["alert"],
-        "probabilities": {
-            "Low":    round(proba[0] * 100, 1),
-            "Medium": round(proba[1] * 100, 1),
-            "High":   round(proba[2] * 100, 1),
-        },
-        "features": {k: round(float(v), 2) for k, v in features.items()
-                     if k in FEATURES},
-    }
+        row = np.array([[features[f] for f in FEATURES]])
+        row_sc = SCALER.transform(row)
+
+        pred_class = int(MODEL.predict(row_sc)[0])
+        proba      = MODEL.predict_proba(row_sc)[0].tolist()
+
+        meta = RISK_META[pred_class]
+        return {
+            "model_type":   "random_forest",
+            "risk_level":   meta["label"],
+            "risk_class":   pred_class,
+            "risk_color":   meta["color"],
+            "risk_emoji":   meta["emoji"],
+            "alert":        meta["alert"],
+            "probabilities": {
+                "Low":    round(proba[0] * 100, 1),
+                "Medium": round(proba[1] * 100, 1),
+                "High":   round(proba[2] * 100, 1),
+            },
+            "features": {k: round(float(v), 2) for k, v in features.items()
+                         if k in FEATURES},
+        }
 
 
 # ─── Routes ───────────────────────────────────────────────────────────────────
@@ -106,13 +183,18 @@ def predict():
     Accept JSON with either:
       (a) lat + lon  → fetch live weather then predict
       (b) full feature dict → predict directly (manual override)
+
+    Optional: "model_type" can be "random_forest" or "deep_learning"
     """
     data = request.get_json(force=True, silent=True) or {}
+    model_type = data.get("model_type", "random_forest")
+
+    all_features = ["temperature", "humidity", "wind_speed", "drought_index", "vegetation", "slope"]
 
     # Manual feature input
-    if all(k in data for k in FEATURES):
-        features = {k: float(data[k]) for k in FEATURES}
-        result   = _predict(features)
+    if all(k in data for k in all_features):
+        features = {k: float(data[k]) for k in all_features}
+        result   = _predict(features, model_type)
         result["source"] = "manual"
         return jsonify(result)
 
@@ -128,7 +210,7 @@ def predict():
         logger.exception("Feature fetch failed")
         return jsonify({"error": str(exc)}), 500
 
-    result = _predict(features)
+    result = _predict(features, model_type)
     result["source"]      = features.get("source", "unknown")
     result["city"]        = features.get("city", "")
     result["description"] = features.get("description", "")
@@ -143,9 +225,34 @@ def islands():
     return jsonify(ISLANDS)
 
 
+@app.route("/geocode", methods=["GET"])
+def geocode():
+    """Reverse geocode lat/lon to location name."""
+    lat = request.args.get("lat", type=float)
+    lon = request.args.get("lon", type=float)
+    if lat is None or lon is None:
+        return jsonify({"error": "Provide lat and lon parameters"}), 400
+    result = reverse_geocode(lat, lon)
+    return jsonify(result)
+
+
+@app.route("/models")
+def models():
+    return jsonify({
+        "available_models": ["random_forest", "deep_learning"],
+        "random_forest": {"loaded": MODEL is not None, "type": "Random Forest Classifier"},
+        "deep_learning": {"loaded": DEEP_MODEL is not None, "type": DEEP_MODEL_TYPE if DEEP_MODEL else "Not available"}
+    })
+
+
 @app.route("/health")
 def health():
-    return jsonify({"status": "ok", "model_loaded": MODEL is not None})
+    return jsonify({
+        "status": "ok",
+        "random_forest_loaded": MODEL is not None,
+        "deep_learning_loaded": DEEP_MODEL is not None,
+        "deep_model_type": DEEP_MODEL_TYPE if DEEP_MODEL else None
+    })
 
 
 # ─── Entry point ──────────────────────────────────────────────────────────────

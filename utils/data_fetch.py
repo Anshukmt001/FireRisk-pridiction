@@ -2,14 +2,18 @@
 utils/data_fetch.py
 Fetches real-time weather data from OpenWeatherMap API.
 Falls back to simulated data if the API key is missing / quota exceeded.
+Reverse geocoding via Nominatim (OpenStreetMap) for location names.
 """
 
 import os
 import random
 import logging
+import time
 import requests
 
 logger = logging.getLogger(__name__)
+
+NOMINATIM_URL = "https://nominatim.openstreetmap.org/reverse"
 
 # ── Set your API key here OR export it as an env variable ─────────────────────
 # export OPENWEATHER_API_KEY="your_key_here"
@@ -142,3 +146,43 @@ def fetch_all_features(lat: float, lon: float) -> dict:
         "icon":          weather.get("icon", "01d"),
         "source":        weather.get("source", "unknown"),
     }
+
+
+def reverse_geocode(lat: float, lon: float) -> dict:
+    """
+    Reverse geocode (lat, lon) to a human-readable location name using Nominatim.
+    Returns a dict with display_name, city, state, country.
+    """
+    try:
+        params = {
+            "lat": lat,
+            "lon": lon,
+            "format": "json",
+            "addressdetails": 1,
+            "zoom": 10,
+        }
+        headers = {
+            "User-Agent": "ForestGuard/1.0 (Fire Risk Prediction App)",
+            "Accept": "application/json"
+        }
+        resp = requests.get(NOMINATIM_URL, params=params, headers=headers, timeout=5)
+        resp.raise_for_status()
+        data = resp.json()
+
+        address = data.get("address", {})
+
+        city = address.get("city") or address.get("town") or address.get("village") or address.get("county") or ""
+        state = address.get("state") or address.get("region") or ""
+        country = address.get("country") or ""
+        display_name = data.get("display_name", "")
+
+        return {
+            "display_name": display_name,
+            "city": city,
+            "state": state,
+            "country": country,
+            "success": True
+        }
+    except Exception as e:
+        logger.warning(f"Reverse geocoding failed: {e}")
+        return {"display_name": "", "city": "", "state": "", "country": "", "success": False}

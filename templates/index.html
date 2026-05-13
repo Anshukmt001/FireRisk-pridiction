@@ -55,11 +55,15 @@
   <aside class="panel panel--controls">
     <h2 class="panel-title">Select Location</h2>
 
-    <!-- Island Search -->
-    <div class="search-wrap">
-      <input type="text" id="islandSearch" placeholder="Search island name..." onkeydown="if(event.key==='Enter') searchIsland()" />
-      <button class="search-btn" onclick="searchIsland()">🔍</button>
-    </div>
+<!-- Island Search -->
+  <div class="search-wrap">
+    <input type="text" id="islandSearch" placeholder="Search island name..." onkeydown="if(event.key==='Enter') searchIsland()" />
+    <button class="search-btn" onclick="searchIsland()">🔍</button>
+  </div>
+  <div class="location-display" id="locationDisplay">
+    <span class="location-icon">📍</span>
+    <span class="location-name" id="locationName">Click on map to select</span>
+  </div>
 
     <!-- Island quick-select -->
     <div class="island-grid" id="islandGrid">
@@ -253,6 +257,7 @@ let currentLat = null, currentLon = null;
 let autoTimer  = null;
 let mapMarker  = null;
 let history    = [];
+let currentLocationName = "";
 
 // ─── Search Functionality ──────────────────────────────────────────────────
 function searchIsland() {
@@ -326,6 +331,8 @@ function selectIsland(key, btn) {
   document.getElementById("lonInput").value = isl.lon;
   currentLat = isl.lat;
   currentLon = isl.lon;
+  currentLocationName = isl.name;
+  document.getElementById("locationName").textContent = isl.name;
   flyMap(isl.lat, isl.lon);
 }
 
@@ -341,6 +348,9 @@ map.on("click", e => {
   document.getElementById("lonInput").value = lng.toFixed(4);
   document.querySelectorAll(".island-btn").forEach(b => b.classList.remove("active"));
   placeMarker(lat, lng);
+  currentLat = lat;
+  currentLon = lng;
+  reverseGeocode(lat, lng);
 });
 
 function flyMap(lat, lon) {
@@ -354,6 +364,32 @@ function placeMarker(lat, lon) {
     radius: 10, color: "#ff4d00", fillColor: "#ff7730",
     fillOpacity: 0.85, weight: 2
   }).addTo(map);
+}
+
+async function reverseGeocode(lat, lon) {
+  const locDisplay = document.getElementById("locationName");
+  locDisplay.textContent = "Loading...";
+  try {
+    const res = await fetch(`/geocode?lat=${lat}&lon=${lon}`);
+    const data = await res.json();
+    if (data.success && data.city) {
+      currentLocationName = data.city;
+      let locationText = data.city;
+      if (data.state) locationText += ", " + data.state;
+      if (data.country) locationText += ", " + data.country;
+      locDisplay.textContent = locationText;
+    } else if (data.display_name) {
+      const parts = data.display_name.split(",");
+      currentLocationName = parts[0];
+      locDisplay.textContent = parts.slice(0, 3).join(", ");
+    } else {
+      currentLocationName = `${lat.toFixed(2)}°, ${lon.toFixed(2)}°`;
+      locDisplay.textContent = currentLocationName;
+    }
+  } catch (e) {
+    currentLocationName = `${lat.toFixed(2)}°, ${lon.toFixed(2)}°`;
+    locDisplay.textContent = currentLocationName;
+  }
 }
 
 // ─── Prediction ───────────────────────────────────────────────────────────────
@@ -411,8 +447,8 @@ function renderResult(d) {
   document.getElementById("riskIdle").classList.add("hidden");
   document.getElementById("riskResult").classList.remove("hidden");
 
-  // Location & time
-  let loc = d.city;
+  // Location & time - prefer reverse geocoded name, fallback to API city
+  let loc = currentLocationName || d.city;
   if (!loc || loc === "Simulated Location") {
     loc = d.lat && d.lon ? `${d.lat.toFixed(2)}°, ${d.lon.toFixed(2)}°` : "Manual Entry";
   }
@@ -492,7 +528,8 @@ function setLoading(on) {
 
 // ─── History ──────────────────────────────────────────────────────────────────
 function addHistory(d) {
-  history.unshift({ time: new Date().toLocaleTimeString(), level: d.risk_level, color: d.risk_color, loc: d.city || "Custom" });
+  const loc = currentLocationName || d.city || "Custom";
+  history.unshift({ time: new Date().toLocaleTimeString(), level: d.risk_level, color: d.risk_color, loc: loc });
   if (history.length > 10) history.pop();
 
   const list = document.getElementById("historyList");
