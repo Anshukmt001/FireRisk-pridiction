@@ -7,6 +7,7 @@ import os
 import pickle
 import logging
 import numpy as np
+import requests
 from flask import Flask, request, jsonify, render_template
 
 # Local utilities
@@ -234,6 +235,48 @@ def geocode():
         return jsonify({"error": "Provide lat and lon parameters"}), 400
     result = reverse_geocode(lat, lon)
     return jsonify(result)
+
+
+@app.route("/search", methods=["GET"])
+def search_location():
+    """Search for a location by name (forward geocoding)."""
+    query = request.args.get("q", "")
+    if not query:
+        return jsonify({"error": "Provide a search query"}), 400
+
+    try:
+        search_url = "https://nominatim.openstreetmap.org/search"
+        params = {
+            "q": query,
+            "format": "json",
+            "limit": 5,
+            "addressdetails": 1,
+        }
+        headers = {
+            "User-Agent": "ForestGuard/1.0 (https://github.com/yourrepo)",
+            "Accept": "application/json",
+            "Referer": "http://localhost:5000"
+        }
+        resp = requests.get(search_url, params=params, headers=headers, timeout=10)
+        resp.raise_for_status()
+        results = resp.json()
+
+        if not results:
+            return jsonify({"error": "No locations found", "results": []}), 404
+
+        locations = []
+        for r in results:
+            locations.append({
+                "display_name": r.get("display_name", ""),
+                "lat": float(r.get("lat", 0)),
+                "lon": float(r.get("lon", 0)),
+                "type": r.get("type", ""),
+            })
+
+        return jsonify({"results": locations})
+    except Exception as e:
+        logger.error(f"Search failed: {e}")
+        return jsonify({"error": str(e), "results": []}), 500
 
 
 @app.route("/models")

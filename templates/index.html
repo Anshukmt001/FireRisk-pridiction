@@ -260,8 +260,8 @@ let history    = [];
 let currentLocationName = "";
 
 // ─── Search Functionality ──────────────────────────────────────────────────
-function searchIsland() {
-  const query = document.getElementById("islandSearch").value.toLowerCase().trim();
+async function searchIsland() {
+  const query = document.getElementById("islandSearch").value.trim();
   if (!query) return;
 
   let bestMatch = null;
@@ -269,7 +269,7 @@ function searchIsland() {
 
   for (const [key, isl] of Object.entries(ISLANDS)) {
     const name = isl.name.toLowerCase();
-    if (name.includes(query)) {
+    if (name.includes(query.toLowerCase())) {
       bestMatch = isl;
       bestKey   = key;
       break;
@@ -279,10 +279,34 @@ function searchIsland() {
   if (bestKey) {
     const btn = document.querySelector(`.island-btn[data-key="${bestKey}"]`);
     selectIsland(bestKey, btn);
-    runPrediction(); // Auto-trigger prediction on search match
-    document.getElementById("islandSearch").value = ""; // Clear search
-  } else {
-    showToast("Island not found in presets. Try entering coordinates below.", "warning");
+    runPrediction();
+    document.getElementById("islandSearch").value = "";
+    return;
+  }
+
+  try {
+    const res = await fetch(`/search?q=${encodeURIComponent(query)}`);
+    const data = await res.json();
+    console.log("Search response:", data);
+
+    if (data.results && data.results.length > 0) {
+      const result = data.results[0];
+      currentLat = result.lat;
+      currentLon = result.lon;
+      currentLocationName = result.display_name.split(",")[0];
+      document.getElementById("latInput").value = result.lat.toFixed(4);
+      document.getElementById("lonInput").value = result.lon.toFixed(4);
+      document.getElementById("locationName").textContent = result.display_name.split(",").slice(0, 3).join(", ");
+      placeMarker(result.lat, result.lon);
+      map.flyTo([result.lat, result.lon], 7, { duration: 1.2 });
+      runPrediction();
+      document.getElementById("islandSearch").value = "";
+    } else {
+      showToast(data.error || "Location not found. Try a different search term.", "warning");
+    }
+  } catch (e) {
+    console.error("Search error:", e);
+    showToast("Search failed. Try entering coordinates below.", "warning");
   }
 }
 
